@@ -1,0 +1,142 @@
+---
+title: "NYPD Shooting Incident Data (Historic)"
+author: "A. Srivastav"
+date: "2024-10-13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = FALSE, fig.align = 'center')
+library(tidyverse)
+# NYPD Shooting Incident Data (Historic) from data.gov, Metadata Updated April 26, 2024  
+nypd <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv") %>%
+  select(OCCUR_DATE, OCCUR_TIME, BORO) %>%
+  rename(Shooting_Date = OCCUR_DATE,
+         Shooting_Time = OCCUR_TIME,
+         Borough = BORO) %>%
+  mutate(Shooting_Date = mdy(Shooting_Date)) %>%
+  mutate(Shooting_Month = month(Shooting_Date))
+
+# For Density Information
+density_tibble = tibble(
+  Borough = character(),
+  density = double()
+)
+
+# Data of Population per Acre from https://popfactfinder.planning.nyc.gov/ using 2020 Census Results
+density_tibble <- density_tibble %>%
+  add_row(Borough = "MANHATTAN",
+          density = 116.8) %>%
+  add_row(Borough = "BROOKLYN",
+          density = 61.6) %>%
+  add_row(Borough = "BRONX",
+          density = 54.6) %>%
+  add_row(Borough = "QUEENS",
+          density = 34.6) %>%
+  add_row(Borough = "STATEN ISLAND",
+          density = 13.5)
+# Join tables
+nypd <- nypd %>%
+  full_join(density_tibble, by = "Borough")
+```
+
+# Time Analysis
+I want to investigate how often there are shootings based on the time of day. This is a plot showing the relationship, followed by the minimum 2 and maximum 2 times of day where shootings occur based on times they have occurred.
+```{r time_analysis}
+# Aggregate data.
+time_analysis <- nypd %>%
+  group_by(Shooting_Time) %>%
+  summarize(Shooting_Count = n())
+
+# Plot data.
+time_analysis %>%
+  ggplot(aes(x = Shooting_Time, y = Shooting_Count)) +
+  geom_point(aes(color = "Shooting Time")) +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Shootings by Time", y = NULL)
+
+# Max and min.
+time_analysis %>% slice_min(Shooting_Count, n = 2)
+time_analysis %>% slice_max(Shooting_Count, n = 2)
+```
+We can therefore see that shootings occur most frequently at nighttime.
+
+# Month Analysis
+I want to investigate how often there are shootings based on the time of day. This is a plot showing the relationship, followed by the minimum 2 and maximum 2 months of year where shootings occur based on times they have occurred.
+```{r month_analysis}
+# Aggregate data.
+month_analysis <- nypd %>%
+  group_by(Shooting_Month) %>%
+  summarize(Shooting_Count = n())
+
+# Plot data.
+month_analysis %>%
+  ggplot(aes(x = Shooting_Month, y = Shooting_Count)) +
+  geom_point(aes(color = "Shooting Time")) +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Shootings by Month", y = NULL)
+
+# Min and max.
+month_analysis %>% slice_min(Shooting_Count, n = 2)
+month_analysis %>% slice_max(Shooting_Count, n = 2)
+```
+We can therefore see that shootings occur most frequently in the summer.
+
+# Density Analysis
+I want to investigate the relationship between density of a borough and the shootings occurring in it. This is a plot showing the relationship, followed by the minimum and maximum 2 months of year where shootings occur based on times they have occurred. 
+```{r density_analysis}
+# Aggregate data.
+density_analysis <- nypd %>%
+  group_by(density) %>%
+  summarize(Shooting_Count = n())
+
+# Plot data.
+density_analysis %>%
+  ggplot(aes(x = density, y = Shooting_Count)) +
+  geom_point(aes(color = "Shooting Time")) +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Shootings by Density", y = NULL)
+
+# Min and max.
+density_analysis %>% slice_min(Shooting_Count, n = 2)
+density_analysis %>% slice_max(Shooting_Count, n = 2)
+```
+There is no clear relationship shown here.
+
+I want to now apply a linear regression to this to see if it is predictive.
+
+## Density Modeling
+```{r density_modeling}
+# Linear regression.
+mod <- lm(Shooting_Count ~ density, data = density_analysis)
+
+# Summary.
+summary(mod)
+
+# Predicted values.
+x_grid <- seq(0, 150)
+new_def <- tibble(Shooting_Count = x_grid)
+density_analysis <- density_analysis %>% drop_na()
+
+# Table with predicted values.
+density_tot_w_pred <- density_analysis %>% mutate(pred = predict(mod))
+
+# Plot
+density_tot_w_pred %>% 
+  ggplot() +
+  geom_point(aes(x = density, y = Shooting_Count), color = "blue") +
+  geom_point(aes(x = density, y = pred), color = "red")+
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Shooting Count by Density Prediction", y = NULL)
+
+```
+We can see this is not a very predictive model.
+
+# Bias Identification and Mitigation
+I dealt with personal bias in this matter by making sure that I adjusted for population density instead of population alone, and therefore to see if those better reflected murders in boroughs instead of my stereotypes of them. Within the data, there is probably bias based on how often the boroughs are policed.
