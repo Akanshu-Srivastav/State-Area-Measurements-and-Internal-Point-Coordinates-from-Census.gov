@@ -1,0 +1,254 @@
+---
+title: "Covid-19 Data"
+author: "A. Srivastav"
+date: "2024-10-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+# Import Data as Dr. Wall did.
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = FALSE, fig.align = 'center')
+options(dplyr.summarise.inform = FALSE)
+library(tidyverse)
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_"
+file_names <- c("confirmed_global.csv",
+                  "deaths_global.csv",
+                  "confirmed_US.csv",
+                  "deaths_US.csv")
+urls <- str_c(url_in, file_names)
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+US_cases <- read_csv(urls[3])
+US_deaths <- read_csv(urls[4])
+
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c(`Province/State`,
+                         `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat,Long))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols =-c(`Province/State`,
+                        `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat,Long))
+```
+# Question of Interest
+I am interested in analyzing how population density is related to death rates for Covid-19.
+
+# Source of Data
+The data is sourced from Johns Hopkins Coronavirus Resource Center, that aggregated data from a large variety of datasets from both domestic and international sources from 2020 through March 10, 2023. Basically, the data was organized by cases and deaths from COVID-19 aggregated to a specific date and by location.
+
+```{r tidyandtransform, include=FALSE}
+# Using Dr. Wall's examples.
+library(lubridate)
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = `Country/Region`,
+         Province_State = `Province/State`) %>%
+  mutate(date = mdy(date))
+summary(global)
+global <- global %>% filter(cases>0)
+```
+
+Below is a summary of the global values created by combining American and global COVID-19 information.
+```{r global}
+# As Dr. Wall did.
+summary(global)
+
+US_cases <- US_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+US <- US_cases %>%
+  full_join(US_deaths)
+
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+
+global <- global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, Population,
+         Combined_Key)
+
+```
+
+# State Density Analysis
+
+I try to see if there is a significant relationship between density within a state or region and deaths per thousand of that state or region. I include the minimum and maximum values after the analysis.
+```{r state_density_analysis}
+# As Dr. Wall did.
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+# Joining with State Area information.
+states_areas_lookup_url <- "https://raw.githubusercontent.com/Akanshu-Srivastav/State-Area-Measurements-and-Internal-Point-Coordinates-from-Census.gov/refs/heads/main/US_Areas.csv"
+states_areas <- read_csv(states_areas_lookup_url)
+states_areas <- states_areas %>%
+  rename(Province_State = `State and other areas`,
+         Land_Area = `Land Area`)
+US_by_state <- US_by_state %>%
+  left_join(states_areas, by = "Province_State")
+US_by_state <- US_by_state %>%
+  mutate(density = Population/Land_Area)
+US_by_state <- US_by_state %>%
+  select(density, everything())
+US_state_totals <- US_by_state %>%
+  group_by(Province_State) %>%
+  summarize(deaths = max(deaths), cases=max(cases),
+            density = max(density),
+            population = max(Population),
+            cases_per_thou = 1000 * cases / population,
+            deaths_per_thou = 1000 * deaths / population) %>%
+  filter(cases > 0, population > 0)
+
+# Plot this.
+US_state_totals %>%
+  ggplot(aes(x = density, y=deaths_per_thou)) +
+  geom_point(aes(color = "density")) +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in US by Density of State", y = NULL)
+
+# Max and min.
+US_state_totals %>%
+  slice_min(deaths_per_thou) %>%
+  select(deaths_per_thou, density, everything())
+
+US_state_totals %>%
+  slice_max(deaths_per_thou) %>%
+  select(deaths_per_thou, density, everything())
+
+```
+There doesn't seem to be a significant relationship here based on the graph.
+
+# US Density Modeling
+
+I try to use a model to fit the American data. Below are the summary statistics and then the graph of predicted versus actual results. The blue ones are the actual results and the red are predicted.
+```{r us_density_modeling}
+mod <- lm(deaths_per_thou ~ density, data = US_state_totals)
+
+summary(mod)
+```
+
+```{r us_density_modeling_tibble, include=FALSE}
+x_grid <- seq(0, 12000)
+new_def <- tibble(deaths_per_thou = x_grid)
+US_state_totals <- US_state_totals %>% drop_na()
+US_state_totals %>% mutate(pred = predict(mod))
+
+US_tot_w_pred <- US_state_totals %>% mutate(pred = predict(mod))
+```
+
+```{r us_density_modeling_graph}
+US_tot_w_pred %>% ggplot() +
+  geom_point(aes(x = density, y = deaths_per_thou), color = "blue") +
+  geom_point(aes(x = density, y = pred), color = "red") +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Predicted and Actual American COVID19 Deaths per Thousand From Density", y = NULL)
+```
+This model does not fit the data well based on the summary statistics and the graph.
+
+# Global Density Analysis
+I try to see if there is a significant relationship between COVID-19 deaths per thousand and population density of a country or a region. I include the minimum and maximum values after the analysis.
+```{r global_density_analysis}
+global_land_areas_url = "https://raw.githubusercontent.com/Akanshu-Srivastav/State-Area-Measurements-and-Internal-Point-Coordinates-from-Census.gov/refs/heads/main/Global%20Land%20Areas.csv"
+global_land_areas = read_csv(global_land_areas_url)
+global_land_areas <- global_land_areas %>%
+  rename(Country_Region = `Country or Area`)
+global <- global %>%
+  left_join(global_land_areas, by = "Country_Region")
+global <- global %>%
+  select(Country_Region, date, cases, deaths, Population, Value)
+global <- global %>%
+  mutate(density = Population/Value)
+global_totals <- global %>%
+  group_by(Country_Region) %>%
+  summarize(deaths = max(deaths), cases=max(cases),
+            density = max(density),
+            population = max(Population),
+            cases_per_thou = 1000 * cases / population,
+            deaths_per_thou = 1000 * deaths / population) %>%
+  filter(cases > 0, population > 0)
+
+# Plot graph.
+global_totals %>%
+  ggplot(aes(x = density, y=deaths_per_thou)) +
+  geom_point(aes(color = "density")) +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in the World by Density of Country or Area", y = NULL)
+
+# Min and Max.
+global_totals %>%
+  slice_min(deaths_per_thou) %>%
+  select(deaths_per_thou, density, everything())
+
+global_totals %>%
+  slice_max(deaths_per_thou) %>%
+  select(deaths_per_thou, density, everything())
+```
+There does not seem to be a significant relationship based on the graph.
+
+# Global Density Modeling
+I try to use a model to fit the global data. Below are the summary statistics and then the graph of predicted versus actual results. The blue ones are the actual results and the red are predicted.
+```{r global_density_modeling}
+mod <- lm(deaths_per_thou ~ density, data = global_totals)
+
+summary(mod)
+
+```
+
+```{r global_density_modeling_tibble, include=FALSE}
+x_grid <- seq(0, 200000)
+new_def <- tibble(deaths_per_thou = x_grid)
+global_totals <- global_totals %>% drop_na()
+global_totals %>% mutate(pred = predict(mod))
+
+global_tot_w_pred <- global_totals %>% mutate(pred = predict(mod))
+```
+
+```{r global_density_modeling_graph}
+global_tot_w_pred %>% ggplot() +
+  geom_point(aes(x = density, y = deaths_per_thou), color = "blue") +
+  geom_point(aes(x = density, y = pred), color = "red") +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "Predicted and Actual Global COVID19 Deaths per Thousand From Density", y = NULL)
+```
+This model does not fit the data well based on the summary statistics and the graph.
+
+# Bias Mitigation
+I tried to avoid bias of my personal stereotypes of what countries have had COVID-19 issues by controlling for density instead of other socioeconomic factors. Within the data, there is probably a wide difference in ability to report COVID-19 infections, based on different governmental systems, their abilities to comprehensively test people, and their acknowledgement of the existence of COVID-19.
