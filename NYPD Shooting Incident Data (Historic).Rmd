@@ -140,3 +140,7 @@ We can see this is not a very predictive model.
 
 # Bias Identification and Mitigation
 I dealt with personal bias in this matter by making sure that I adjusted for population density instead of population alone, and therefore to see if those better reflected murders in boroughs instead of my stereotypes of them. Within the data, there is probably bias based on how often the boroughs are policed.
+
+# Conclusion
+Conclusion
+In conclusion, I see that although time of day and month of year seem to correlate with increases and decreases and shootings, the density of boroughs does not directly do so. However, all of these, including that of the density of boroughs, are starting off points in the cyclical analysis of data science to keep investigating further.
